@@ -1,0 +1,148 @@
+---
+title: "PredictionAssignment"
+author: "Aurelien Fauvel"
+date: "12/10/2016"
+output: html_document
+---
+
+## Load necessary libraries
+
+```{r}
+library(caret)
+library(rpart)
+library(randomForest)
+```
+
+## Download training and testing sets
+
+```{r}
+## Assigns url to variables
+url.training <- c("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+url.testing <- c("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+
+## Download files if they do not exist in the directory
+if(!file.exists("training.csv")) download.file(url.training, "training.csv")
+if(!file.exists("testing.csv")) download.file(url.testing, "testing.csv")
+
+## Read the files into dataframes
+training <- read.csv("training.csv", na.strings=c("NA", "#DIV/0!"))
+testing <- read.csv("testing.csv", na.strings=c("NA", "#DIV/0!"))
+```
+
+## Explore training set
+
+```{r}
+## Explore size of training set and how many variables
+dim(training)
+
+## Check class of outcome "classe" as factor
+class(training$classe)
+
+## Identify frequency of each class, which will be our basic prediction for each class
+basic.pred <- table(training$classe)/nrow(training)
+basic.pred
+```
+
+Our first prediction rule would be to assign the frequency of each class as defined by basis.pred. Hopefully we can do better with a more elaboratede prediction model.
+
+## Clean the data
+
+When looking at the data, one can see that many variables have mostly NAs. We will then remove them in both the training and testing data sets.
+Furthermore, the first 5 columns are not usefull, as they contain the subject name, time stamps; we will also remove those. Indeed we want to be able to predict the classe based on the features, and not who did the movements.
+
+```{r}
+## Creates a separate section not to remove first 7 columns each time
+to.remove <- names(training)[1:7]
+```
+
+```{r}
+## Remove first 5 columns
+training <- training[,-which(names(training) %in% to.remove)]
+testing <- testing[,-which(names(testing) %in% to.remove)]
+
+## Remove columns with NAs identified in training set
+col.no.na <- names(training[,colSums(is.na(training)) == 0])
+training <- training[,col.no.na]
+testing <- testing[,names(testing) %in% c(col.no.na, "problem_id")]
+```
+
+## Partition the training data
+
+To estimate our out-of-sample error before applying our prediction model to the testing set, we need to separate our training set into a training and a testing set. I choose to keep 70% of the training data to train the model, and therefore 30% to cross-validate and compute out-of-sample errors.
+
+```{r}
+## Ensure reproducibility through setting the seed
+set.seed(12345)
+
+## Partition data
+inTrain <- createDataPartition(training$classe, p = 0.7, list = FALSE)
+train.data <- training[inTrain,]
+test.data <- training[-inTrain,]
+```
+
+## Fit a model
+
+A linear regression is not adapted as we need to predict a class variable. We will try 3 different models and select the best one:
+- Decision tree
+- Random Forest
+- Boosting
+
+1st model: decision tree:
+
+```{r, cache = TRUE}
+## Define cross validation parameters
+train_control<- trainControl(method="cv", number=10)
+
+## Model 1: decision tree
+model.tree <- train(classe ~., method = "rpart", data = train.data, trControl=train_control)
+pred.tree <- predict(model.tree, newdata = test.data)
+```
+
+2nd model: Random Forest
+
+```{r, cache = TRUE}
+## Model 2: Random Forest
+model.rf <- randomForest(classe ~., data = train.data)
+pred.rf <- predict(model.rf, newdata = test.data)
+```
+
+3rd model: Boosting
+
+```{r, cache = TRUE}
+## Model 3: Boosting
+model.gbm <- train(classe ~., data = train.data, method = "gbm", verbose = FALSE)
+pred.gbm <- predict(model.gbm, newdata = test.data)
+```
+
+Summary:
+
+```{r}
+## Calculates accuracies of three models
+acc.tree <- confusionMatrix(pred.tree, test.data$classe)$overall[1]
+acc.rf <- confusionMatrix(pred.rf, test.data$classe)$overall[1]
+acc.gbm <- confusionMatrix(pred.gbm, test.data$classe)$overall[1]
+
+## Create a summary table with accuracies
+acc.table <- data.frame(method = c("decision tree", "random forest", "boosting"), accuracy = c(acc.tree, acc.rf, acc.gbm))
+print(acc.table)
+```
+
+The best model for the out-of-sample error is the model based on the random forest method. As its accuracy is quite good, and the decision tree's accuracy quite low, we will not use a majority vote on the three models.
+
+## Predict testing data
+
+```{r}
+## Use three models to predict testing classes
+test.tree <- predict(model.tree, newdata = testing)
+test.rf <- predict(model.rf, newdata = testing)
+test.gbm <- predict(model.gbm, newdata = testing)
+
+## Summarize all resuls into one table
+res.table <- data.frame(subject_id = testing$problem_id, predict.tree = test.tree, predict.rf = test.rf, predict.gbm = test.gbm)
+
+## Checks if random forest and boosting agree
+for(i in 1:nrow(res.table)) res.table$rf.gbm.id[i] <- res.table$predict.rf[i] == res.table$predict.gbm[i] 
+print(res.table)
+```
+
+We can then see that both random forest and boosting models agree on the prediction.
